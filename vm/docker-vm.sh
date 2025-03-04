@@ -2,6 +2,7 @@
 
 # Copyright (c) 2021-2025 community-scripts ORG
 # Author: thost96 (thost96)
+# Editor: Brian Anders Ericson (BrianAndersEricson)
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
 
 source /dev/stdin <<< $(wget -qLO - https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/api.func)
@@ -27,6 +28,13 @@ NSAPP="debian12vm"
 var_os="debian"
 var_version="12"
 DISK_SIZE="8G"
+USE_STATIC_IP="no"
+STATIC_IP=""
+STATIC_GATEWAY=""
+STATIC_DNS=""
+CREATE_USER="no"
+CUSTOM_USER=""
+CUSTOM_PASSWORD=""
 
 YW=$(echo "\033[33m")
 BL=$(echo "\033[36m")
@@ -156,6 +164,9 @@ function default_settings() {
   MTU=""
   START_VM="yes"
   METHOD="default"
+  USE_STATIC_IP="no"
+  DISK_SIZE="8G"
+  CREATE_USER="no"
   echo -e "${DGN}Using Virtual Machine ID: ${BGN}${VMID}${CL}"
   echo -e "${DGN}Using Machine Type: ${BGN}i440fx${CL}"
   echo -e "${DGN}Using Disk Cache: ${BGN}None${CL}"
@@ -167,8 +178,89 @@ function default_settings() {
   echo -e "${DGN}Using MAC Address: ${BGN}${MAC}${CL}"
   echo -e "${DGN}Using VLAN: ${BGN}Default${CL}"
   echo -e "${DGN}Using Interface MTU Size: ${BGN}Default${CL}"
+  echo -e "${DGN}Disk Size: ${BGN}${DISK_SIZE}${CL}"
+  echo -e "${DGN}Using Static IP: ${BGN}No${CL}"
+  echo -e "${DGN}Create Custom User: ${BGN}No${CL}"
   echo -e "${DGN}Start VM when completed: ${BGN}yes${CL}"
   echo -e "${BL}Creating a Docker VM using the above default settings${CL}"
+}
+
+function configure_static_ip() {
+  if STATIC_IP=$(whiptail --backtitle "Proxmox VE Helper Scripts" --inputbox "Enter Static IP Address (Example: 192.168.1.100/24)" 8 58 --title "STATIC IP" --cancel-button Exit-Script 3>&1 1>&2 2>&3); then
+    if [ -z "$STATIC_IP" ]; then
+      USE_STATIC_IP="no"
+      echo -e "${DGN}Using Static IP: ${BGN}No${CL}"
+      return
+    fi
+
+    if ! [[ $STATIC_IP =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+$ ]]; then
+      whiptail --backtitle "Proxmox VE Helper Scripts" --title "ERROR" --msgbox "Invalid IP format. Please use format like 192.168.1.100/24" 10 58
+      configure_static_ip
+      return
+    fi
+
+    if STATIC_GATEWAY=$(whiptail --backtitle "Proxmox VE Helper Scripts" --inputbox "Enter Gateway IP Address (Example: 192.168.1.1)" 8 58 --title "GATEWAY IP" --cancel-button Exit-Script 3>&1 1>&2 2>&3); then
+      if [ -z "$STATIC_GATEWAY" ]; then
+        whiptail --backtitle "Proxmox VE Helper Scripts" --title "ERROR" --msgbox "Gateway IP is required for static IP configuration" 10 58
+        configure_static_ip
+        return
+      fi
+
+      if ! [[ $STATIC_GATEWAY =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        whiptail --backtitle "Proxmox VE Helper Scripts" --title "ERROR" --msgbox "Invalid Gateway IP format. Please use format like 192.168.1.1" 10 58
+        configure_static_ip
+        return
+      fi
+    else
+      exit-script
+    fi
+
+    if STATIC_DNS=$(whiptail --backtitle "Proxmox VE Helper Scripts" --inputbox "Enter DNS Server IP (Example: 1.1.1.1 or leave blank for gateway)" 8 58 --title "DNS SERVER" --cancel-button Exit-Script 3>&1 1>&2 2>&3); then
+      if [ -z "$STATIC_DNS" ]; then
+        STATIC_DNS="$STATIC_GATEWAY"
+      fi
+
+      if ! [[ $STATIC_DNS =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        whiptail --backtitle "Proxmox VE Helper Scripts" --title "ERROR" --msgbox "Invalid DNS IP format. Please use format like 1.1.1.1" 10 58
+        configure_static_ip
+        return
+      fi
+    else
+      exit-script
+    fi
+
+    USE_STATIC_IP="yes"
+    echo -e "${DGN}Using Static IP: ${BGN}${STATIC_IP}${CL}"
+    echo -e "${DGN}Using Gateway: ${BGN}${STATIC_GATEWAY}${CL}"
+    echo -e "${DGN}Using DNS Server: ${BGN}${STATIC_DNS}${CL}"
+  else
+    exit-script
+  fi
+}
+
+function configure_custom_user() {
+  if CUSTOM_USER=$(whiptail --backtitle "Proxmox VE Helper Scripts" --inputbox "Enter username for the new user with sudo privileges" 8 58 --title "CREATE USER" --cancel-button Exit-Script 3>&1 1>&2 2>&3); then
+    if [ -z "$CUSTOM_USER" ]; then
+      CREATE_USER="no"
+      echo -e "${DGN}Create Custom User: ${BGN}No${CL}"
+      return
+    fi
+
+    if CUSTOM_PASSWORD=$(whiptail --backtitle "Proxmox VE Helper Scripts" --passwordbox "Enter password for $CUSTOM_USER" 8 58 --title "USER PASSWORD" --cancel-button Exit-Script 3>&1 1>&2 2>&3); then
+      if [ -z "$CUSTOM_PASSWORD" ]; then
+        whiptail --backtitle "Proxmox VE Helper Scripts" --title "ERROR" --msgbox "Password is required for the new user" 10 58
+        configure_custom_user
+        return
+      fi
+    else
+      exit-script
+    fi
+
+    CREATE_USER="yes"
+    echo -e "${DGN}Create Custom User: ${BGN}$CUSTOM_USER${CL}"
+  else
+    exit-script
+  fi
 }
 
 function advanced_settings() {
@@ -320,6 +412,31 @@ function advanced_settings() {
     exit-script
   fi
 
+  if DISK_SIZE=$(whiptail --backtitle "Proxmox VE Helper Scripts" --inputbox "Set Disk Size (e.g. 10G, 20G, 50G)" 8 58 8G --title "DISK SIZE" --cancel-button Exit-Script 3>&1 1>&2 2>&3); then
+    if [ -z $DISK_SIZE ]; then
+      DISK_SIZE="8G"
+      echo -e "${DGN}Using Disk Size: ${BGN}$DISK_SIZE${CL}"
+    else
+      echo -e "${DGN}Using Disk Size: ${BGN}$DISK_SIZE${CL}"
+    fi
+  else
+    exit-script
+  fi
+
+  if (whiptail --backtitle "Proxmox VE Helper Scripts" --title "CONFIGURE STATIC IP" --yesno "Would you like to configure a static IP?" 10 58); then
+    configure_static_ip
+  else
+    USE_STATIC_IP="no"
+    echo -e "${DGN}Using Static IP: ${BGN}No${CL}"
+  fi
+
+  if (whiptail --backtitle "Proxmox VE Helper Scripts" --title "CREATE USER" --yesno "Would you like to create a user with sudo privileges?" 10 58); then
+    configure_custom_user
+  else
+    CREATE_USER="no"
+    echo -e "${DGN}Create Custom User: ${BGN}No${CL}"
+  fi
+
   if (whiptail --backtitle "Proxmox VE Helper Scripts" --title "START VIRTUAL MACHINE" --yesno "Start VM when completed?" 10 58); then
     echo -e "${DGN}Start VM when completed: ${BGN}yes${CL}"
     START_VM="yes"
@@ -420,14 +537,46 @@ apt-get -qq update && apt-get -qq install libguestfs-tools lsb-release -y >/dev/
 msg_ok "Installed libguestfs-tools successfully"
 
 msg_info "Adding Docker and Docker Compose Plugin to Debian 12 Qcow2 Disk Image"
-virt-customize -q -a "${FILE}" --install qemu-guest-agent,apt-transport-https,ca-certificates,curl,gnupg,software-properties-common,lsb-release >/dev/null &&
+
+# Basic setup
+virt-customize -q -a "${FILE}" --install qemu-guest-agent,apt-transport-https,ca-certificates,curl,gnupg,software-properties-common,lsb-release,sudo >/dev/null &&
 virt-customize -q -a "${FILE}" --run-command "mkdir -p /etc/apt/keyrings && curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg" >/dev/null &&
 virt-customize -q -a "${FILE}" --run-command "echo 'deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian bookworm stable' > /etc/apt/sources.list.d/docker.list" >/dev/null &&
 virt-customize -q -a "${FILE}" --run-command "apt-get update -qq && apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin" >/dev/null &&
 virt-customize -q -a "${FILE}" --run-command "systemctl enable docker" >/dev/null &&
 virt-customize -q -a "${FILE}" --run-command "echo -n > /etc/machine-id" >/dev/null
-msg_ok "Added Docker and Docker Compose Plugin to Debian 12 Qcow2 Disk Image successfully"
 
+# Add custom user if requested
+if [ "$CREATE_USER" == "yes" ]; then
+  msg_info "Adding custom user with sudo privileges"
+  HASHED_PASSWORD=$(openssl passwd -6 "$CUSTOM_PASSWORD")
+  virt-customize -q -a "${FILE}" --run-command "useradd -m -s /bin/bash -G sudo $CUSTOM_USER" >/dev/null &&
+  virt-customize -q -a "${FILE}" --run-command "echo '$CUSTOM_USER:$HASHED_PASSWORD' | chpasswd -e" >/dev/null
+  msg_ok "Added user $CUSTOM_USER with sudo privileges"
+fi
+
+# Configure static IP if requested
+if [ "$USE_STATIC_IP" == "yes" ]; then
+  msg_info "Configuring static IP"
+  IP_ADDR=$(echo $STATIC_IP | cut -d'/' -f1)
+  NETMASK=$(echo $STATIC_IP | cut -d'/' -f2)
+  
+  # Create netplan config for static IP
+  virt-customize -q -a "${FILE}" --write /etc/netplan/01-netcfg.yaml:"network:
+  version: 2
+  renderer: networkd
+  ethernets:
+    ens18:
+      dhcp4: no
+      addresses: [$STATIC_IP]
+      gateway4: $STATIC_GATEWAY
+      nameservers:
+        addresses: [$STATIC_DNS]" >/dev/null
+  
+  msg_ok "Configured static IP: $STATIC_IP"
+fi
+
+msg_ok "Added Docker and Docker Compose Plugin to Debian 12 Qcow2 Disk Image successfully"
 
 msg_info "Creating a Docker VM"
 qm create $VMID -agent 1${MACHINE} -tablet 0 -localtime 1 -bios ovmf${CPU_TYPE} -cores $CORE_COUNT -memory $RAM_SIZE \
@@ -439,7 +588,7 @@ qm set $VMID \
   -scsi0 ${DISK1_REF},${DISK_CACHE}${THIN}size=2G \
   -boot order=scsi0 \
   -serial0 socket >/dev/null
-qm resize $VMID scsi0 8G >/dev/null
+qm resize $VMID scsi0 $DISK_SIZE >/dev/null
 qm set $VMID --agent enabled=1 >/dev/null
 
   DESCRIPTION=$(cat <<EOF
